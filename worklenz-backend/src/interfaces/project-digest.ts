@@ -6,6 +6,7 @@ export interface IProjectDigestTask {
 }
 
 export interface IProjectDigestSubscriber {
+  user_id: string;
   name: string;
   email: string;
 }
