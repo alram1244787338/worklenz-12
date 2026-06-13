@@ -1617,6 +1617,7 @@ BEGIN
                                                         INNER JOIN team_members tm ON tasks_assignees.team_member_id = tm.id
                                                WHERE tm.user_id = _user_id
                                                  AND t.project_id = projects.id
+                                                 AND t.archived IS FALSE
                                                  AND t.end_date IS NOT NULL
                                                  AND t.end_date < CURRENT_DATE
                                                  AND EXISTS(SELECT id
@@ -1633,6 +1634,7 @@ BEGIN
                                      FROM team_members
                                      WHERE user_id = _user_id
                                        AND team_members.team_id = teams.id)
+                                AND NOT EXISTS(SELECT 1 FROM archived_projects WHERE project_id = projects.id AND user_id = _user_id)
                               --
                           ) r)
              FROM teams
@@ -1688,6 +1690,7 @@ BEGIN
                                                         INNER JOIN team_members tm ON tasks_assignees.team_member_id = tm.id
                                                WHERE tm.user_id = _user_id
                                                  AND t.project_id = projects.id
+                                                 AND t.archived IS FALSE
                                                  AND TO_CHAR(tasks_assignees.created_at, 'yyyy-mm-dd') =
                                                      TO_CHAR(CURRENT_DATE, 'yyyy-mm-dd')
                                                --
@@ -1698,6 +1701,7 @@ BEGIN
                                      FROM team_members
                                      WHERE user_id = _user_id
                                        AND team_members.team_id = teams.id)
+                                AND NOT EXISTS(SELECT 1 FROM archived_projects WHERE project_id = projects.id AND user_id = _user_id)
                               --
                           ) r)
              FROM teams
@@ -1750,6 +1754,7 @@ BEGIN
                                                         INNER JOIN team_members tm ON tasks_assignees.team_member_id = tm.id
                                                WHERE tm.user_id = _user_id
                                                  AND t.project_id = projects.id
+                                                 AND t.archived IS FALSE
                                                  AND t.completed_at IS NOT NULL
                                                  AND TO_CHAR(t.completed_at, 'yyyy-mm-dd') =
                                                      TO_CHAR(CURRENT_DATE, 'yyyy-mm-dd')
@@ -1762,6 +1767,7 @@ BEGIN
                                      FROM team_members
                                      WHERE user_id = _user_id
                                        AND team_members.team_id = teams.id)
+                                AND NOT EXISTS(SELECT 1 FROM archived_projects WHERE project_id = projects.id AND user_id = _user_id)
                               --
                           ) r)
              FROM teams
@@ -2038,6 +2044,7 @@ BEGIN
                                 WHERE task_id = tasks.id) AS members
                         FROM tasks
                         WHERE project_id = projects.id
+                          AND tasks.archived IS FALSE
                           AND TO_CHAR(tasks.completed_at, 'yyyy-mm-dd') =
                               TO_CHAR(CURRENT_DATE, 'yyyy-mm-dd')) rec) AS today_completed,
 
@@ -2053,6 +2060,7 @@ BEGIN
                                 WHERE task_id = tasks.id) AS members
                         FROM tasks
                         WHERE project_id = projects.id
+                          AND tasks.archived IS FALSE
                           AND TO_CHAR(tasks.created_at, 'yyyy-mm-dd') =
                               TO_CHAR(CURRENT_DATE, 'yyyy-mm-dd')) rec) AS today_new,
 
@@ -2068,16 +2076,31 @@ BEGIN
                                 WHERE task_id = tasks.id) AS members
                         FROM tasks
                         WHERE project_id = projects.id
+                          AND tasks.archived IS FALSE
                           AND TO_CHAR(tasks.end_date, 'yyyy-mm-dd') =
                               TO_CHAR(CURRENT_DATE + INTERVAL '1 day', 'yyyy-mm-dd')) rec) AS due_tomorrow,
 
                  (SELECT COALESCE(JSON_AGG(rec), '[]'::JSON)
-                  FROM (SELECT name, email
-                        FROM users
-                        WHERE id = (SELECT user_id
-                                    FROM project_subscribers
-                                    WHERE project_id = projects.id
-                                      AND user_id = users.id)) rec) AS subscribers
+                  FROM (SELECT u.id AS user_id, u.name, u.email
+                        FROM users u
+                        WHERE u.id = (SELECT ps.user_id
+                                      FROM project_subscribers ps
+                                      WHERE ps.project_id = projects.id
+                                        AND ps.user_id = u.id)
+                          -- subscriber must still be an active team member
+                          AND EXISTS(SELECT 1 FROM team_members tm
+                                     WHERE tm.team_id = projects.team_id
+                                       AND tm.user_id = u.id)
+                          -- subscriber has not personally archived this project
+                          AND NOT EXISTS(SELECT 1 FROM archived_projects ap
+                                         WHERE ap.project_id = projects.id
+                                           AND ap.user_id = u.id)
+                          -- subscriber has daily_digest_enabled for this team
+                          AND EXISTS(SELECT 1 FROM notification_settings ns
+                                     WHERE ns.user_id = u.id
+                                       AND ns.team_id = projects.team_id
+                                       AND ns.daily_digest_enabled IS TRUE)
+                       ) rec) AS subscribers
 
           FROM projects
           WHERE EXISTS(SELECT 1 FROM project_subscribers WHERE project_id = projects.id)
@@ -3592,7 +3615,8 @@ DECLARE
 BEGIN
     SELECT COALESCE(ARRAY_TO_JSON(ARRAY_AGG(ROW_TO_JSON(rec))), '[]'::JSON)
     INTO _result
-    FROM (SELECT name,
+    FROM (SELECT users.id AS user_id,
+                 name,
                  email,
                  (SELECT id
                   FROM team_members
@@ -3611,6 +3635,7 @@ BEGIN
                                              (SELECT COALESCE(ARRAY_TO_JSON(ARRAY_AGG(ROW_TO_JSON(r))), '[]'::JSON) AS tasks
                                               FROM (SELECT t.id,
                                                            t.name AS name,
+                                                           task_updates.id AS task_update_id,
                                                            (SELECT name FROM users WHERE id = task_updates.reporter_id) AS updater_name,
                                                            (SELECT STRING_AGG(DISTINCT
                                                                               (SELECT name
@@ -3624,13 +3649,16 @@ BEGIN
                                                     WHERE task_updates.user_id = users.id
                                                       AND task_updates.project_id = projects.id
                                                       AND task_updates.type = 'ASSIGN'
-                                                      AND is_sent IS FALSE
+                                                      AND task_updates.is_sent IS FALSE
+                                                      AND t.archived IS FALSE
                                                     ORDER BY task_updates.created_at) r)
                                       FROM projects
                                       WHERE team_id = teams.id
+                                        AND NOT EXISTS(SELECT 1 FROM archived_projects WHERE project_id = projects.id AND user_id = users.id)
                                         AND EXISTS(SELECT 1
                                                    FROM task_updates
                                                    WHERE project_id = projects.id
+                                                     AND user_id = users.id
                                                      AND type = 'ASSIGN'
                                                      AND is_sent IS FALSE)) r)
                         FROM teams
@@ -3640,9 +3668,11 @@ BEGIN
                                WHERE team_id = teams.id
                                  AND user_id = users.id) IS TRUE) r)
           FROM users
-          WHERE EXISTS(SELECT 1 FROM task_updates WHERE user_id = users.id)) rec;
+          WHERE EXISTS(SELECT 1 FROM task_updates WHERE user_id = users.id AND is_sent IS FALSE)) rec;
 
-    UPDATE task_updates SET is_sent = TRUE;
+    -- NOTE: We intentionally do NOT mark task_updates as sent here.
+    -- The application layer marks them per-user after successful email delivery
+    -- to ensure idempotency and avoid race conditions on retry.
 
     RETURN _result;
 END
