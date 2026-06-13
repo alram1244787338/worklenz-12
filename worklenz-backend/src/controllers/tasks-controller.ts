@@ -21,6 +21,7 @@ import TasksControllerBase from "./tasks-controller-base";
 import { insertToActivityLogs } from "../services/activity-logs/activity-logs.service";
 import { IActivityLog } from "../services/activity-logs/interfaces";
 import { getKey, getRootDir, uploadBase64 } from "../shared/s3";
+import { TASK_CANONICAL_SORT } from "../shared/task-query-helpers";
 
 export default class TasksController extends TasksControllerBase {
   private static notifyProjectUpdates(socketId: string, projectId: string) {
@@ -285,7 +286,7 @@ export default class TasksController extends TasksControllerBase {
       WHERE archived IS FALSE
         AND project_id = $1
         AND parent_task_id IS NULL
-      ORDER BY start_date;
+      ORDER BY ${TASK_CANONICAL_SORT};
     `;
     const result = await db.query(q, [req.query.project_id]);
 

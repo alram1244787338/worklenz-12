@@ -4,6 +4,7 @@ import db from "../../config/db";
 import moment from "moment";
 import { DATE_RANGES, TASK_PRIORITY_COLOR_ALPHA } from "../../shared/constants";
 import { formatDuration, formatLogText, getColor, int } from "../../shared/utils";
+import { TASK_CANONICAL_SORT, formatDateForExport } from "../../shared/task-query-helpers";
 
 export default abstract class ReportingControllerBase extends WorklenzControllerBase {
   protected static getPercentage(n: number, total: number) {
@@ -52,26 +53,27 @@ export default abstract class ReportingControllerBase extends WorklenzController
               FROM project_phases
               WHERE id = (SELECT phase_id FROM task_phase WHERE task_id = tasks.id)) AS phase_name,
               completed_at,
-              total_minutes,
-              (SELECT SUM(time_spent) FROM task_work_log WHERE task_id = tasks.id) AS total_seconds_spent
+              COALESCE(total_minutes, 0) AS total_minutes,
+              COALESCE((SELECT SUM(time_spent) FROM task_work_log WHERE task_id = tasks.id), 0) AS total_seconds_spent
       FROM tasks
       WHERE project_id = $1
-      ORDER BY name;
+        AND archived IS FALSE
+      ORDER BY ${TASK_CANONICAL_SORT};
     `;
     const result = await db.query(q, [projectId]);
 
     for (const item of result.rows) {
-      const endDate = moment(item.end_date);
-      const completedDate = moment(item.completed_at);
-      const overdueDays = completedDate.diff(endDate, "days");
+      const endDate = moment.utc(item.end_date);
+      const completedDate = moment.utc(item.completed_at);
 
-      if (overdueDays > 0) {
-        item.overdue_days = overdueDays.toString();
-      } else {
-        item.overdue_days = "0";
+      let overdueDays = 0;
+      if (item.completed_at && item.end_date && endDate.isValid() && completedDate.isValid()) {
+        overdueDays = completedDate.diff(endDate, "days");
       }
 
-      item.total_minutes_spent = Math.ceil(item.total_seconds_spent / 60);
+      item.overdue_days = overdueDays > 0 ? overdueDays.toString() : "0";
+
+      item.total_minutes_spent = Math.ceil((item.total_seconds_spent || 0) / 60);
 
       if (~~(item.total_minutes_spent) > ~~(item.total_minutes)) {
         const overlogged_time = ~~(item.total_minutes_spent) - ~~(item.total_minutes);

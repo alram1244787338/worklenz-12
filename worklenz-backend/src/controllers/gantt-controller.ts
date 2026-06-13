@@ -7,6 +7,7 @@ import WorklenzControllerBase from "./worklenz-controller-base";
 import HandleExceptions from "../decorators/handle-exceptions";
 import { getColor } from "../shared/utils";
 import moment from "moment";
+import { TASK_CANONICAL_SORT } from "../shared/task-query-helpers";
 
 export default class GanttController extends WorklenzControllerBase {
   @HandleExceptions()
@@ -44,7 +45,7 @@ export default class GanttController extends WorklenzControllerBase {
         WHERE archived IS FALSE
           AND project_id = $1
           AND parent_task_id IS NULL
-        ORDER BY roadmap_sort_order, created_at DESC;`;
+        ORDER BY ${TASK_CANONICAL_SORT};`;
     const result = await db.query(q, [req.query.project_id]);
     return res.status(200).send(new ServerResponse(true, result.rows));
   }
@@ -82,7 +83,7 @@ export default class GanttController extends WorklenzControllerBase {
               WHERE archived IS FALSE
                 AND project_id = pm.project_id
                 AND ta.team_member_id = tmiv.team_member_id
-              ORDER BY roadmap_sort_order, start_date DESC) rec) AS subtasks
+              ORDER BY ${TASK_CANONICAL_SORT}) rec) AS subtasks
       FROM project_members pm
               INNER JOIN team_member_info_view tmiv ON pm.team_member_id = tmiv.team_member_id
       WHERE project_id = $1
