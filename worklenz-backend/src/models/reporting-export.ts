@@ -2,6 +2,7 @@ import moment from "moment";
 import db from "../config/db";
 import ReportingOverviewBase from "../controllers/reporting/overview/reporting-overview-base";
 import { formatDuration, getColor, int } from "../shared/utils";
+import { TASK_CANONICAL_SORT, formatDateForExport } from "../shared/task-query-helpers";
 
 export class ReportingExportModel extends ReportingOverviewBase {
 
@@ -60,10 +61,10 @@ export class ReportingExportModel extends ReportingOverviewBase {
               FROM project_members pm
                   LEFT JOIN tasks_assignees ta
                             ON pm.id = ta.project_member_id AND ta.team_member_id = pm.team_member_id
-                  LEFT JOIN tasks t ON ta.task_id = t.id
+                  LEFT JOIN tasks t ON ta.task_id = t.id AND t.archived IS FALSE
               WHERE pm.project_id = $1
               GROUP BY pm.id
-              ORDER BY name
+              ORDER BY COALESCE((SELECT name FROM team_member_info_view WHERE team_member_id = pm.team_member_id), '')
     `;
     const result = await db.query(q, [projectId]);
 
@@ -86,13 +87,23 @@ export class ReportingExportModel extends ReportingOverviewBase {
 
   public static async getMemberTasks(teamMemberId: string, projectId: string | null, onlySingleMember: string, key: string, dateRange: string[] | [], includeArchived: boolean, userId: string) {
 
-    const projectFilter = projectId ? ` AND t.project_id = $2` : "";
+    const params: any[] = [teamMemberId];
+    let paramOffset = 2;
+
+    const projectFilter = projectId ? ` AND t.project_id = $${paramOffset++}` : "";
+    if (projectId) {
+      params.push(projectId);
+    }
 
     let activityLogDurationFilterClause = ``;
     let archivedClause = ``;
     if (onlySingleMember === "true") {
       activityLogDurationFilterClause = this.activityLogDurationFilter(key, dateRange);
-      archivedClause = includeArchived ? "" : `AND t.project_id NOT IN (SELECT project_id FROM archived_projects WHERE project_id = t.project_id AND archived_projects.user_id = '${userId}')`;
+      if (!includeArchived) {
+        archivedClause = `AND t.project_id NOT IN (SELECT project_id FROM archived_projects WHERE project_id = t.project_id AND archived_projects.user_id = $${paramOffset})`;
+        params.push(userId);
+        paramOffset++;
+      }
     }
 
 
@@ -125,10 +136,10 @@ export class ReportingExportModel extends ReportingOverviewBase {
           t.end_date,
           t.completed_at,
 
-          (total_minutes * 60) AS total_minutes,
-          (work_log.total_time_spent - (total_minutes * 60)) AS overlogged_time,
+          (COALESCE(t.total_minutes, 0) * 60) AS total_minutes,
+          (COALESCE(work_log.total_time_spent, 0) - (COALESCE(t.total_minutes, 0) * 60)) AS overlogged_time,
 
-          (SELECT SUM(time_spent)
+          (SELECT COALESCE(SUM(time_spent), 0)
             FROM task_work_log twl
             WHERE team_member_id = ta.team_member_id
               AND twl.task_id = t.id
@@ -140,20 +151,24 @@ export class ReportingExportModel extends ReportingOverviewBase {
                   LEFT JOIN task_priorities tp ON t.priority_id = tp.id
                   LEFT JOIN task_statuses ts ON t.status_id = ts.id
                   LEFT JOIN sys_task_status_categories sc ON ts.category_id = sc.id
-          WHERE ta.team_member_id = $1 ${projectFilter} ${archivedClause}
-          ORDER BY t.end_date DESC;`;
+          WHERE ta.team_member_id = $1
+            AND t.archived IS FALSE
+            ${projectFilter} ${archivedClause}
+          ORDER BY t.end_date DESC NULLS LAST;`;
 
-    const params = projectId ? [teamMemberId, projectId] : [teamMemberId];
     const result = await db.query(q, params);
 
     for (const project of result.rows) {
       project.project_color = getColor(project.project_name);
       // estimated time
-      project.estimated_string = formatDuration(moment.duration(~~(project.total_minutes), "seconds"));
+      const totalMinutes = int(project.total_minutes);
+      project.estimated_string = formatDuration(moment.duration(totalMinutes, "seconds"));
       // logged time
-      project.time_spent_string = formatDuration(moment.duration(~~(project.time_logged), "seconds"));
+      const timeLogged = int(project.time_logged);
+      project.time_spent_string = formatDuration(moment.duration(timeLogged, "seconds"));
       // overlogged_time
-      project.overlogged_time = formatDuration(moment.duration(~~(project.overlogged_time), "seconds"));
+      const overloggedTime = int(project.overlogged_time);
+      project.overlogged_time = formatDuration(moment.duration(overloggedTime, "seconds"));
 
       project.completed_date = project.completed_at ? project.completed_at : null;
     }

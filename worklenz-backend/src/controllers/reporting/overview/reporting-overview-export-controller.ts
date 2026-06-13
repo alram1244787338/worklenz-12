@@ -8,6 +8,7 @@ import moment from "moment";
 import Excel from "exceljs";
 import ReportingControllerBase from "../reporting-controller-base";
 import { TASK_PRIORITY_COLOR_ALPHA } from "../../../shared/constants";
+import { formatDateForExport } from "../../../shared/task-query-helpers";
 
 export default class ReportingOverviewExportController extends ReportingOverviewBase {
 
@@ -149,8 +150,8 @@ export default class ReportingOverviewExportController extends ReportingOverview
         client: item.client ? item.client : "-",
         category: item.category_name ? item.category_name : "-",
         status: item.status_name ? item.status_name : "-",
-        start_date: item.start_date ? moment(item.start_date).format("YYYY-MM-DD") : "-",
-        end_date: item.end_date ? moment(item.end_date).format("YYYY-MM-DD") : "-",
+        start_date: formatDateForExport(item.start_date),
+        end_date: formatDateForExport(item.end_date),
         days_left: item.days_left ? item.days_left.toString() : "-",
         estimated_hours: item.estimated_time ? item.estimated_time.toString() : "-",
         actual_hours: item.actual_time ? item.actual_time.toString() : "-",
@@ -383,20 +384,22 @@ export default class ReportingOverviewExportController extends ReportingOverview
 
     // set table data
     for (const item of results) {
-      const time_spent = { hours: ~~(item.total_minutes_spent / 60), minutes: item.total_minutes_spent % 60 };
-      item.total_minutes_spent = Math.ceil(item.total_seconds_spent / 60);
+      const totalMinutesSpent = int(item.total_seconds_spent) > 0
+        ? Math.ceil(int(item.total_seconds_spent) / 60)
+        : int(item.total_minutes_spent);
+      const time_spent = { hours: ~~(totalMinutesSpent / 60), minutes: totalMinutesSpent % 60 };
 
       sheet.addRow({
         task: item.name,
         status: item.status_name ? item.status_name : "-",
         priority: item.priority_name ? item.priority_name : "-",
         phase: item.phase_name ? item.phase_name : "-",
-        due_date: item.end_date ? moment(item.end_date).format("YYYY-MM-DD") : "-",
-        completed_on: item.completed_at ? moment(item.completed_at).format("YYYY-MM-DD") : "-",
+        due_date: formatDateForExport(item.end_date),
+        completed_on: formatDateForExport(item.completed_at),
         days_overdue: item.overdue_days ? item.overdue_days : "-",
-        estimated_time: item.total_minutes !== "0" ? `${~~(item.total_minutes / 60)}h ${(item.total_minutes % 60)}m` : "-",
-        logged_time: item.total_minutes_spent ? `${time_spent.hours}h ${(time_spent.minutes)}m` : "-",
-        overlogged_time: item.overlogged_time_string !== "0h 0m" ? item.overlogged_time_string : "-",
+        estimated_time: int(item.total_minutes) !== 0 ? `${~~(int(item.total_minutes) / 60)}h ${int(item.total_minutes) % 60}m` : "-",
+        logged_time: totalMinutesSpent > 0 ? `${time_spent.hours}h ${time_spent.minutes}m` : "-",
+        overlogged_time: item.overlogged_time_string && item.overlogged_time_string !== "0h 0m" ? item.overlogged_time_string : "-",
       });
     }
 
@@ -478,8 +481,8 @@ export default class ReportingOverviewExportController extends ReportingOverview
         project: item.project_name ? item.project_name : "-",
         status: item.status_name ? item.status_name : "-",
         priority: item.priority_name ? item.priority_name : "-",
-        due_date: item.end_date ? moment(item.end_date).format("YYYY-MM-DD") : "-",
-        completed_on: item.completed_date ? moment(item.completed_date).format("YYYY-MM-DD") : "-",
+        due_date: formatDateForExport(item.end_date),
+        completed_on: formatDateForExport(item.completed_date),
         estimated_time: item.estimated_string ? item.estimated_string : "-",
         logged_time: item.time_spent_string ? item.time_spent_string : "-",
         overlogged_time: item.overlogged_time ? item.overlogged_time : "-",
@@ -559,8 +562,8 @@ export default class ReportingOverviewExportController extends ReportingOverview
         project: item.project_name ? item.project_name : "-",
         status: item.status_name ? item.status_name : "-",
         priority: item.priority_name ? item.priority_name : "-",
-        due_date: item.end_date ? moment(item.end_date).format("YYYY-MM-DD") : "-",
-        completed_on: item.completed_date ? moment(item.completed_date).format("YYYY-MM-DD") : "-",
+        due_date: formatDateForExport(item.end_date),
+        completed_on: formatDateForExport(item.completed_date),
         estimated_time: item.estimated_string ? item.estimated_string : "-",
         logged_time: item.time_spent_string ? item.time_spent_string : "-",
         overlogged_time: item.overlogged_time ? item.overlogged_time : "-",

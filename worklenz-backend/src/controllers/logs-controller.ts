@@ -10,7 +10,8 @@ export default class LogsController extends WorklenzControllerBase {
   @HandleExceptions()
   public static async getActivityLog(req: IWorkLenzRequest, res: IWorkLenzResponse): Promise<IWorkLenzResponse> {
     const q = `
-      SELECT description, (SELECT name FROM projects WHERE projects.id = project_logs.project_id) AS project_name, created_at
+      SELECT description, (SELECT name FROM projects WHERE projects.id = project_logs.project_id) AS project_name,
+             created_at AT TIME ZONE 'UTC' AS created_at
       FROM project_logs
       WHERE team_id = $1
         AND (CASE

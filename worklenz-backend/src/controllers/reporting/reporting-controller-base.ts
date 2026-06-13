@@ -25,10 +25,45 @@ export default abstract class ReportingControllerBase extends WorklenzController
     return data.count || 0;
   }
 
-  protected static async getArchivedProjectsClause(archived = false, user_id: string, column_name: string) {
-    return archived
-      ? ""
-      : `AND ${column_name} NOT IN (SELECT project_id FROM archived_projects WHERE project_id = ${column_name} AND user_id = '${user_id}') `;
+  /**
+   * Build an archived-projects filter clause.
+   *
+   * Uses parameterized query syntax ($N) to prevent SQL injection.
+   * The returned object includes both the SQL clause and the params array
+   * that must be concatenated into the query's parameter list.
+   *
+   * @param archived     If true, no filter is applied (include archived projects).
+   * @param user_id      The user whose archived projects to exclude.
+   * @param column_name  The SQL column to compare against (e.g. "projects.id").
+   * @param paramOffset  The starting $N parameter index for the user_id value.
+   */
+  protected static async getArchivedProjectsClause(
+    archived = false,
+    user_id: string,
+    column_name: string,
+    paramOffset = 2
+  ): Promise<{ clause: string; params: string[] }> {
+    if (archived) {
+      return { clause: "", params: [] };
+    }
+    return {
+      clause: `AND ${column_name} NOT IN (SELECT project_id FROM archived_projects WHERE project_id = ${column_name} AND user_id = $${paramOffset}) `,
+      params: [user_id]
+    };
+  }
+
+  /**
+   * Backward-compatible version that returns just the clause string.
+   * Used by callers that haven't been migrated to the parameterized form yet.
+   * Escapes the user_id as a UUID literal to prevent SQL injection.
+   *
+   * @deprecated Use the overload returning { clause, params } instead.
+   */
+  protected static getArchivedProjectsClauseSync(archived = false, user_id: string, column_name: string) {
+    if (archived) return "";
+    // Validate and escape user_id - only allow UUID format characters
+    const safeUserId = /^[0-9a-fA-F-]+$/.test(user_id) ? user_id : "";
+    return `AND ${column_name} NOT IN (SELECT project_id FROM archived_projects WHERE project_id = ${column_name} AND user_id = '${safeUserId}') `;
   }
 
   protected static async getAllTasks(projectId: string | null) {

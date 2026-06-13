@@ -8,6 +8,7 @@ import {ServerResponse} from "../models/server-response";
 import WorklenzControllerBase from "./worklenz-controller-base";
 import HandleExceptions from "../decorators/handle-exceptions";
 import {formatDuration, formatLogText, getColor} from "../shared/utils";
+import {formatDateForExport} from "../shared/task-query-helpers";
 
 export default class ActivitylogsController extends WorklenzControllerBase {
   @HandleExceptions()
@@ -26,6 +27,10 @@ export default class ActivitylogsController extends WorklenzControllerBase {
       log.done_by.color_code = getColor(log.done_by.name);
       log.log_text = await formatLogText(log);
       log.attribute_type = log.attribute_type?.replace(/_/g, " ");
+      // Normalize timestamps to UTC to avoid timezone drift between page and export
+      if (log.created_at) {
+        log.created_at_utc = moment.utc(log.created_at).toISOString();
+      }
     }
     data.activity_logs.color_code = getColor(data.activity_logs.name);
 
