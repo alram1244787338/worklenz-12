@@ -217,42 +217,109 @@ export function formatLogText(log: { log_type: IActivityLogChangeType; }) {
   return log.log_type;
 }
 
-// Calculate the next start date based on the recurring schedule
+/**
+ * Find the Nth occurrence of a given weekday in a specific month.
+ * e.g. the 2nd Tuesday (day_of_month=2, week_of_month=2) of March 2024.
+ * If the Nth occurrence doesn't exist (e.g. 5th Monday in a month with only 4),
+ * returns the last valid occurrence.
+ */
+export function getNthWeekdayOfMonth(year: number, month: number, dayOfWeek: number, n: number): moment.Moment {
+  // Start from the 1st of the target month
+  const first = moment({ year, month, date: 1 });
+  // Find the first occurrence of the target weekday in this month
+  const firstDayOfMonth = first.day(); // 0=Sun..6=Sat
+  let diff = dayOfWeek - firstDayOfMonth;
+  if (diff < 0) diff += 7;
+  const firstOccurrence = first.clone().add(diff, "days");
+
+  // Advance by (n - 1) weeks
+  const target = firstOccurrence.clone().add(n - 1, "weeks");
+
+  // If we overflowed into the next month, fall back to the last valid occurrence
+  if (target.month() !== month) {
+    return firstOccurrence.clone().add(n - 2, "weeks");
+  }
+  return target;
+}
+
+/**
+ * Clamp a date to the last day of the target month if the requested day
+ * exceeds the number of days in that month.
+ * e.g. date_of_month=31 in February → Feb 28 (or 29 in leap year)
+ */
+function clampDateToMonth(base: moment.Moment, targetDay: number): moment.Moment {
+  const daysInMonth = base.daysInMonth();
+  const clampedDay = Math.min(targetDay, daysInMonth);
+  return base.clone().date(clampedDay);
+}
+
+// Calculate the next start date based on the recurring schedule.
+// Always operates on date-only (startOf day) to prevent time drift across runs.
 export function calculateNextEndDate(schedule: IRecurringSchedule, lastDate: moment.Moment): moment.Moment {
-  const nextDate = moment(lastDate);
+  // Normalize to start-of-day to prevent time-of-day drift
+  const normalized = moment(lastDate).startOf("day");
 
   switch (schedule.schedule_type) {
     case "daily":
-      return nextDate.add(1, "day");
+      return normalized.add(1, "day").startOf("day");
+
     case "weekly":
       if (schedule.days_of_week && schedule.days_of_week.length > 0) {
-        let daysAdded = 0;
-        do {
-          nextDate.add(1, "day");
-          daysAdded++;
-        } while (!schedule.days_of_week.includes(nextDate.day()) && daysAdded < 7);
+        // Sort target days ascending so we always find the *next* one
+        const sortedDays = [...schedule.days_of_week].sort((a, b) => a - b);
+        const currentDay = normalized.day();
+        // Find the next day-of-week strictly after today
+        let nextDay = sortedDays.find(d => d > currentDay);
+        if (nextDay === undefined) {
+          // Wrap to the first target day in the following week
+          nextDay = sortedDays[0];
+          const daysUntilNextWeek = 7 - currentDay + nextDay;
+          return normalized.add(daysUntilNextWeek, "days").startOf("day");
+        }
+        return normalized.add(nextDay - currentDay, "days").startOf("day");
       } else {
-        nextDate.add(1, "week");
+        return normalized.add(1, "week").startOf("day");
       }
-      return nextDate;
-    case "monthly":
+
+    case "monthly": {
       if (schedule.date_of_month) {
-        nextDate.add(1, "month").date(schedule.date_of_month);
-      } else if (schedule.day_of_month && schedule.week_of_month) {
-        nextDate.add(1, "month").startOf("month").day(schedule.day_of_month);
-        nextDate.add(schedule.week_of_month - 1, "weeks");
+        // Advance to the 1st of the next month, then clamp the requested day
+        const nextMonthFirst = normalized.clone().add(1, "month").startOf("month");
+        return clampDateToMonth(nextMonthFirst, schedule.date_of_month).startOf("day");
+      } else if (schedule.day_of_month != null && schedule.week_of_month != null) {
+        // Nth weekday of the next month (e.g. "2nd Tuesday")
+        const nextMonth = normalized.clone().add(1, "month");
+        const result = getNthWeekdayOfMonth(
+          nextMonth.year(),
+          nextMonth.month(),
+          schedule.day_of_month,
+          schedule.week_of_month
+        );
+        return result.startOf("day");
       } else {
-        nextDate.add(1, "month");
+        // Plain "same day next month" — clamp if the day doesn't exist
+        const dayOfMonth = normalized.date();
+        const nextMonthFirst = normalized.clone().add(1, "month").startOf("month");
+        return clampDateToMonth(nextMonthFirst, dayOfMonth).startOf("day");
       }
-      return nextDate;
+    }
+
     case "yearly":
-      return nextDate.add(1, "year");
+      return normalized.add(1, "year").startOf("day");
+
     case "every_x_days":
-      return nextDate.add(schedule.interval_days || 1, "days");
+      return normalized.add(schedule.interval_days || 1, "days").startOf("day");
+
     case "every_x_weeks":
-      return nextDate.add(schedule.interval_weeks || 1, "weeks");
-    case "every_x_months":
-      return nextDate.add(schedule.interval_months || 1, "months");
+      return normalized.add(schedule.interval_weeks || 1, "weeks").startOf("day");
+
+    case "every_x_months": {
+      // Same clamping logic as monthly to handle e.g. Jan 31 + 2 months → March 28/31
+      const dayOfMonth = normalized.date();
+      const targetMonthFirst = normalized.clone().add(schedule.interval_months || 1, "months").startOf("month");
+      return clampDateToMonth(targetMonthFirst, dayOfMonth).startOf("day");
+    }
+
     default:
       throw new Error(`Invalid schedule type: ${schedule.schedule_type}`);
   }
@@ -261,7 +328,7 @@ export function calculateNextEndDate(schedule: IRecurringSchedule, lastDate: mom
 
 export function calculateNextEndDates(schedule: IRecurringSchedule, lastEndDate: moment.Moment, count: number): moment.Moment[] {
   const endDates: moment.Moment[] = [];
-  let currentDate = moment(lastEndDate);
+  let currentDate = moment(lastEndDate).startOf("day");
 
   for (let i = 0; i < count; i++) {
     currentDate = calculateNextEndDate(schedule, currentDate);
