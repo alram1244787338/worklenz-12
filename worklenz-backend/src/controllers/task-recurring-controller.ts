@@ -87,12 +87,22 @@ export default class TaskRecurringController extends WorklenzControllerBase {
 
       // Define the next start date based on the schedule
       const nextStartDate = calculateNextEndDate(schedule, lastTask.start_date);
+      const nextStartDateStr = nextStartDate.format("YYYY-MM-DD");
+
+      // Atomic dedup: only insert if no task with this schedule_id + end_date exists yet
+      const dedupCheck = await db.query(
+        `SELECT id FROM tasks WHERE schedule_id = $1 AND end_date::DATE = $2::DATE LIMIT 1;`,
+        [scheduleId, nextStartDateStr]
+      );
+      if (dedupCheck.rows.length > 0) {
+        return; // Already exists, skip
+      }
 
       const result = await db.query(
         `INSERT INTO tasks (name, start_date, end_date, priority_id, project_id, reporter_id, description, total_minutes, status_id, schedule_id)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id;`,
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id;`,
         [
-          taskTemplate.name, nextStartDate, null, taskTemplate.priority_id,
+          taskTemplate.name, nextStartDateStr, null, taskTemplate.priority_id,
           lastTask.project_id, lastTask.reporter_id, taskTemplate.description,
           0, taskTemplate.status_id, scheduleId
         ]
